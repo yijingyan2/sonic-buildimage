@@ -54,9 +54,9 @@ stages:
 
     - bash: |
         set -xe
-        git submodule update --init --recursive
+        git submodule update --init --recursive -- src/ptf src/ptf-py3 src/sonic-sairedis src/sonic-swss-common
 
-        make NOBUSTER=1 NOBULLSEYE=1 SONIC_BUILD_JOBS=$(nproc) DEFAULT_CONTAINER_REGISTRY=publicmirror.azurecr.io ENABLE_DOCKER_BASE_PULL=y configure PLATFORM=vs DOCKER_BUILDKIT=0
+        make NOBUSTER=1 NOBULLSEYE=1 SONIC_BUILD_JOBS=$(nproc) DEFAULT_CONTAINER_REGISTRY=publicmirror.azurecr.io ENABLE_DOCKER_BASE_PULL=y configure PLATFORM=vs DOCKER_BUILDKIT=0 NOTRIXIE=1 # docker-ptf is built for bookworm, disable trixie currently to save build time. will enable it after migrating to trixie.
         make -f Makefile.work BLDENV=bookworm SONIC_BUILD_JOBS=$(nproc) DEFAULT_CONTAINER_REGISTRY=publicmirror.azurecr.io ENABLE_DOCKER_BASE_PULL=y target/docker-ptf.gz
         cp -r target $(Build.ArtifactStagingDirectory)/target
       displayName: Build docker-ptf.gz
