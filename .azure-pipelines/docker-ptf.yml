@@ -38,6 +38,20 @@ parameters:
   default: sonicdev
 
 stages:
+- stage: Prepare
+  jobs:
+  - job: Prepare
+    steps:
+    - script: |
+        DEFAULT_MIRROR_URL_PREFIX=http://packages.trafficmanager.net
+        DEBIAN_TIMESTAMP=$(curl $DEFAULT_MIRROR_URL_PREFIX/debian-snapshot/debian/latest)
+        DEBIAN_SECURITY_TIMESTAMP=$(curl $DEFAULT_MIRROR_URL_PREFIX/debian-snapshot/debian-security/latest)
+        echo "DEBIAN_TIMESTAMP=$DEBIAN_TIMESTAMP, DEBIAN_SECURITY_TIMESTAMP=$DEBIAN_SECURITY_TIMESTAMP"
+        echo "##vso[task.setvariable variable=DEBIAN_TIMESTAMP;isOutput=true]$DEBIAN_TIMESTAMP"
+        echo "##vso[task.setvariable variable=DEBIAN_SECURITY_TIMESTAMP;isOutput=true]$DEBIAN_SECURITY_TIMESTAMP"
+      name: SetVersions
+      displayName: 'Set snapshot versions'
+
 - stage: Build
   jobs:
   - job: Build
@@ -52,12 +66,23 @@ stages:
         sudo setfacl -R -b $(Agent.BuildDirectory)
       displayName: 'setfacl'
 
+    - script: |
+        echo "DEBIAN_TIMESTAMP=$DEBIAN_TIMESTAMP, DEBIAN_SECURITY_TIMESTAMP=$DEBIAN_SECURITY_TIMESTAMP"
+        if [ "$MIRROR_SNAPSHOT" == y ]; then
+          mkdir -p target/versions/default/
+          echo "debian==$DEBIAN_TIMESTAMP" > target/versions/default/versions-mirror
+          echo "debian-security==$DEBIAN_SECURITY_TIMESTAMP" >> target/versions/default/versions-mirror
+          cat target/versions/default/versions-mirror
+        fi
+      displayName: 'Set snapshot versions'
+
     - bash: |
         set -xe
         git submodule update --init --recursive -- src/ptf src/ptf-py3 src/sonic-sairedis src/sonic-swss-common
+        BUILD_OPTIONS="SONIC_BUILD_JOBS=$(nproc) DEFAULT_CONTAINER_REGISTRY=publicmirror.azurecr.io ENABLE_DOCKER_BASE_PULL=y MIRROR_SNAPSHOT=y SONIC_BUILD_RETRY_COUNT=3 SONIC_BUILD_RETRY_INTERVAL=600 DOCKER_BUILDKIT=0"
 
-        make NOBUSTER=1 NOBULLSEYE=1 SONIC_BUILD_JOBS=$(nproc) DEFAULT_CONTAINER_REGISTRY=publicmirror.azurecr.io ENABLE_DOCKER_BASE_PULL=y configure PLATFORM=vs DOCKER_BUILDKIT=0 NOTRIXIE=1 # docker-ptf is built for bookworm, disable trixie currently to save build time. will enable it after migrating to trixie.
-        make -f Makefile.work BLDENV=bookworm SONIC_BUILD_JOBS=$(nproc) DEFAULT_CONTAINER_REGISTRY=publicmirror.azurecr.io ENABLE_DOCKER_BASE_PULL=y target/docker-ptf.gz
+        make NOBUSTER=1 NOBULLSEYE=1 $BUILD_OPTIONS configure PLATFORM=vs NOTRIXIE=1 # docker-ptf is built for bookworm, disable trixie currently to save build time. will enable it after migrating to trixie.
+        make -f Makefile.work BLDENV=bookworm $BUILD_OPTIONS target/docker-ptf.gz
         cp -r target $(Build.ArtifactStagingDirectory)/target
       displayName: Build docker-ptf.gz
 
