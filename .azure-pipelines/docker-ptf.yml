@@ -62,7 +62,7 @@ stages:
       displayName: Build docker-ptf.gz
 
     - publish:  $(Build.ArtifactStagingDirectory)
-      artifact: 'docker-ptf'
+      artifact: 'sonic-buildimage.vs'
       displayName: "Archive docker image ptf"
 
 - stage: Test
@@ -77,13 +77,13 @@ stages:
     displayName: "[OPTIONAL] Trivy vulnerability scan (docker-ptf)"
     pool: sonic-ubuntu-1c
     continueOnError: true
-    timeoutInMinutes: 30
+    timeoutInMinutes: 60
     steps:
     - checkout: self
       clean: true
       fetchDepth: 1
     - download: current
-      artifact: docker-ptf
+      artifact: 'sonic-buildimage.vs'
       displayName: "Download docker-ptf artifact"
     - script: |
         set -ex
@@ -102,7 +102,7 @@ stages:
           --exit-code 1 \
           --format table \
           --no-progress \
-          --timeout 15m \
+          --timeout 30m \
           --output $(Build.ArtifactStagingDirectory)/trivy-docker-ptf.txt
         TRIVY_EXIT=$?
         echo ""
@@ -120,7 +120,8 @@ stages:
     parameters:
       CHECKOUT_SONIC_MGMT: true
       PTF_MODIFIED: 'True'
-      INCLUDE_JOBS: "t0_job,t1_job,t2_job,t0_2vlans_job,t0_sonic_job,dpu_job,t1_multi_asic_job"
+      OVERRIDE_PARAMS:
+        REPO_NAME: "sonic-mgmt"
 
 - stage: Publish
   dependsOn: Test
@@ -131,7 +132,7 @@ stages:
     timeoutInMinutes: 60
     steps:
     - download: current
-      artifact: 'docker-ptf'
+      artifact: 'sonic-buildimage.vs'
       displayName: "Download docker-ptf image"
 
     - bash: |
