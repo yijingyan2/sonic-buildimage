@@ -78,7 +78,7 @@ stages:
 
     - bash: |
         set -xe
-        git submodule update --init --recursive -- src/ptf src/ptf-py3 src/sonic-sairedis src/sonic-swss-common
+        git submodule update --init --recursive
         BUILD_OPTIONS="SONIC_BUILD_JOBS=$(nproc) DEFAULT_CONTAINER_REGISTRY=publicmirror.azurecr.io ENABLE_DOCKER_BASE_PULL=y MIRROR_SNAPSHOT=y 
                       SONIC_BUILD_RETRY_COUNT=3 SONIC_BUILD_RETRY_INTERVAL=600 DOCKER_BUILDKIT=0 SONIC_VERSION_CONTROL_COMPONENTS="
 
