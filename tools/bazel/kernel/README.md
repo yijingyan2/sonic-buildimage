@@ -179,7 +179,7 @@ kernel ABI dependencies. Other package recipe records remain available.
 ## Validation and public artifacts
 
 The `Bazel kernel DEBs` matrix runs on self-hosted native AMD64
-(`[self-hosted, linux, x64, bazel-vmss]`) and ARM64
+(`[self-hosted, linux, x64, bazel]`) and ARM64
 (`[self-hosted, linux, bazel, arm64]`) runners. Normal runs use the shared
 `grpc://172.16.0.4:9092` cache and allow either a cache hit or an unprivileged
 `linux-sandbox` build of the exact registered kernel source. Only pushes to
@@ -187,6 +187,16 @@ The `Bazel kernel DEBs` matrix runs on self-hosted native AMD64
 runs are read-only. Agents require network access to the cache, server-enforced
 write permissions, Docker for installation checks, unprivileged user namespaces,
 and at least 45 GiB of free scratch space.
+
+Before checkout, the workflow restores access to the default repository workspace
+using the runner user's UID/GID and noninteractive `sudo`. This requires
+passwordless permission to run the repair commands. It rejects redirected paths,
+does not recursively cross filesystem boundaries or follow symlinks, preserves
+regular-file modes, and skips hard-linked files to avoid changing shared cache
+ownership. Directory owner permissions are restored so checkout can clean old
+outputs. The repair does not operate on the whole runner work directory.
+This privileged step is operational cleanup, not isolation from untrusted jobs;
+agents still require the appropriate workflow trust and isolation policy.
 
 To force a cold-build/cache-hit proof, manually dispatch the workflow with
 `verify_cold_cache` enabled. This mode uses a disposable local HTTP cache instead

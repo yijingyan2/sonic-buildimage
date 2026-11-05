@@ -923,7 +923,7 @@ class KernelWorkflowTest(unittest.TestCase):
             self.workflow, re.MULTILINE | re.DOTALL))
 
     def test_shared_cache_defaults_and_optional_cold_proof(self):
-        self.assertIn("runner: [self-hosted, linux, x64, bazel-vmss]", self.workflow)
+        self.assertIn("runner: [self-hosted, linux, x64, bazel]", self.workflow)
         self.assertIn("runner: [self-hosted, linux, bazel, arm64]", self.workflow)
         cold = "github.event_name == 'workflow_dispatch' && inputs.verify_cold_cache"
         self.assertIn("KERNEL_REMOTE_CACHE: ${{ " + cold
@@ -940,6 +940,95 @@ class KernelWorkflowTest(unittest.TestCase):
         self.assertIn("'kernel-cache-hit' || 'kernel-bundle-state'",
                       self.steps["Select verified DEBs and a public validation summary"])
         self.assertNotIn("sudo rm", self.workflow)
+
+    def test_workspace_repair_is_scoped_and_preserves_cache_links(self):
+        name = "Restore workspace access before checkout"
+        step = self.steps[name]
+        self.assertLess(self.workflow.index("- name: " + name),
+                        self.workflow.index("- uses: actions/checkout@"))
+        self.assertIn("working-directory: ${{ runner.temp }}", step)
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        for scenario in ("repair", "absent", "outside", "symlink", "sudo-failure"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                scratch = root / "_temp"
+                scratch.mkdir()
+                workspace = root / "sonic-buildimage/sonic-buildimage"
+                workspace.mkdir(parents=True)
+                outside = root / "cache"
+                outside.mkdir()
+                payload = outside / "object"
+                payload.write_text("shared cache object")
+                payload.chmod(0o444)
+                linked = workspace / "hardlink"
+                os.link(payload, linked)
+                (workspace / "symlink").symlink_to(outside, target_is_directory=True)
+                regular = workspace / "tracked-file"
+                regular.write_text("tracked")
+                regular.chmod(0o444)
+                nested = workspace / ".git"
+                nested.mkdir()
+                nested.chmod(0o555)
+                outside.chmod(0o555)
+                commands = root / "commands"
+                commands.mkdir()
+                calls = root / "sudo-calls.jsonl"
+                changed = root / "chown-calls.jsonl"
+                sudo = commands / "sudo"
+                sudo.write_text(
+                    "#!" + sys.executable + "\n"
+                    "import json, os, sys\n"
+                    "with open(os.environ['SUDO_CALLS'], 'a') as f:\n"
+                    "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                    "if int(os.environ['SUDO_EXIT']):\n"
+                    "    sys.exit(int(os.environ['SUDO_EXIT']))\n"
+                    "assert sys.argv[1] == '-n'\n"
+                    "os.execvp(sys.argv[2], sys.argv[2:])\n")
+                sudo.chmod(0o755)
+                chown = commands / "chown"
+                chown.write_text(
+                    "#!" + sys.executable + "\n"
+                    "import json, os, sys\n"
+                    "with open(os.environ['CHOWN_CALLS'], 'a') as f:\n"
+                    "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n")
+                chown.chmod(0o755)
+                selected = workspace
+                if scenario == "absent":
+                    selected = root / "missing/missing"
+                elif scenario == "outside":
+                    selected = outside
+                elif scenario == "symlink":
+                    shutil.rmtree(workspace)
+                    workspace.symlink_to(outside, target_is_directory=True)
+                repository = "missing" if scenario == "absent" else "sonic-buildimage"
+                result = subprocess.run(
+                    ["bash", "-e", "-o", "pipefail", "-c", script],
+                    cwd=scratch, capture_output=True, text=True,
+                    env=dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"],
+                             RUNNER_TEMP=str(scratch), GITHUB_WORKSPACE=str(selected),
+                             GITHUB_REPOSITORY="owner/" + repository,
+                             SUDO_CALLS=str(calls), CHOWN_CALLS=str(changed),
+                             SUDO_EXIT="23" if scenario == "sudo-failure" else "0"))
+                expected_exit = {"outside": 1, "symlink": 1, "sudo-failure": 23}.get(scenario, 0)
+                self.assertEqual(result.returncode, expected_exit, result.stdout + result.stderr)
+                if scenario == "repair":
+                    self.assertEqual(nested.stat().st_mode & 0o777, 0o755)
+                    self.assertEqual(regular.stat().st_mode & 0o777, 0o444)
+                    ownership_calls = [json.loads(line) for line in changed.read_text().splitlines()]
+                    paths = [path for call in ownership_calls for path in call[3:]]
+                    self.assertIn(str(regular), paths)
+                    self.assertNotIn(str(linked), paths)
+                    self.assertNotIn(str(workspace / "symlink"), paths)
+                    self.assertTrue(all(path.startswith(str(workspace)) for path in paths))
+                    self.assertEqual(len(calls.read_text().splitlines()), 3)
+                elif scenario != "sudo-failure":
+                    self.assertFalse(calls.exists())
+                self.assertEqual(payload.read_text(), "shared cache object")
+                self.assertEqual(payload.stat().st_mode & 0o777, 0o444)
+                self.assertEqual(outside.stat().st_mode & 0o777, 0o555)
+                outside.chmod(0o755)
+                if nested.exists():
+                    nested.chmod(0o755)
 
     def test_build_cache_flags_and_failure_propagation(self):
         step = self.steps["Build and verify kernel DEBs in the normal package directory"]

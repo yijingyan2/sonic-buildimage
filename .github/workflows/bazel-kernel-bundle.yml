@@ -26,7 +26,7 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: [self-hosted, linux, x64, bazel-vmss]
+            runner: [self-hosted, linux, x64, bazel]
             cache_sha256: 6a6b64666c2238ec6b49b7b29f5e41e4149de09417a0028897c9bffe40376876
           - arch: arm64
             runner: [self-hosted, linux, bazel, arm64]
@@ -39,6 +39,33 @@ jobs:
       KERNEL_REMOTE_CACHE: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_cold_cache && 'http://127.0.0.1:8080' || 'grpc://172.16.0.4:9092' }}
       UPLOAD_KERNEL_CACHE: ${{ (github.event_name == 'workflow_dispatch' && inputs.verify_cold_cache) || (github.event_name == 'push' && github.ref == 'refs/heads/master') }}
     steps:
+      - name: Restore workspace access before checkout
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY##*/}"
+          work_root="$(realpath -e -- "$RUNNER_TEMP/..")"
+          expected="$work_root/$repository/$repository"
+          if [[ "$GITHUB_WORKSPACE" != "$expected" ]]; then
+            echo 'Refusing permission repair outside the default repository workspace.' >&2
+            exit 1
+          fi
+          if [[ ! -e "$expected" && ! -L "$expected" ]]; then
+            echo 'No existing workspace to repair.'
+            exit 0
+          fi
+          if [[ ! -d "$expected" || "$(realpath -e -- "$expected")" != "$expected" ]]; then
+            echo 'Refusing permission repair on a redirected workspace.' >&2
+            exit 1
+          fi
+          owner="$(id -u):$(id -g)"
+          sudo -n find -P "$expected" -xdev -type d \
+            -exec chown --no-dereference -- "$owner" {} +
+          sudo -n find -P "$expected" -xdev -type d \
+            -exec chmod u+rwx -- {} +
+          sudo -n find -P "$expected" -xdev -type f -links 1 \
+            -exec chown --no-dereference -- "$owner" {} +
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
