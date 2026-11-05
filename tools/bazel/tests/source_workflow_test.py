@@ -44,7 +44,7 @@ def shell(step):
 class ArchiveCachePolicyTest(unittest.TestCase):
     def test_upload_override_preserves_checkout_cleanliness(self):
         step = steps(jobs()["archive"])["Configure remote cache uploads"]
-        self.assertIn("if: matrix.architecture == 'amd64'", step)
+        self.assertNotRegex(step, r"(?m)^\s+if:")
         self.assertIn("github.event_name == 'push' && github.ref == 'refs/heads/master'", step)
         self.assertIn("try-import %workspace%/.bazelrc.user",
                       (ROOT / "tools/bazel/common.bazelrc").read_text())

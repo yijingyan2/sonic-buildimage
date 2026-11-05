@@ -8,11 +8,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -911,6 +913,66 @@ class KernelConfigurationTest(unittest.TestCase):
                       "https://cache.example.test/#secret", "file:///cache", "https://cache.example.test\n"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 kernel.endpoint(value)
+
+
+class KernelWorkflowTest(unittest.TestCase):
+    def setUp(self):
+        self.workflow = (ROOT / ".github/workflows/bazel-kernel-bundle.yml").read_text()
+        self.steps = dict(re.findall(
+            r"^      - name: ([^\n]+)\n(.*?)(?=^      - |\Z)",
+            self.workflow, re.MULTILINE | re.DOTALL))
+
+    def test_shared_cache_defaults_and_optional_cold_proof(self):
+        self.assertIn("runner: [self-hosted, linux, x64, bazel-vmss]", self.workflow)
+        self.assertIn("runner: [self-hosted, linux, bazel, arm64]", self.workflow)
+        cold = "github.event_name == 'workflow_dispatch' && inputs.verify_cold_cache"
+        self.assertIn("KERNEL_REMOTE_CACHE: ${{ " + cold
+                      + " && 'http://127.0.0.1:8080' || 'grpc://172.16.0.4:9092' }}",
+                      self.workflow)
+        self.assertIn("UPLOAD_KERNEL_CACHE: ${{ (" + cold
+                      + ") || (github.event_name == 'push' && github.ref == 'refs/heads/master') }}",
+                      self.workflow)
+        for name in ("Start a disposable cache for optional cold-build verification",
+                     "Verify a fresh output directory reuses the kernel action"):
+            self.assertIn("if: " + cold, self.steps[name])
+        self.assertIn("if: always() && " + cold,
+                      self.steps["Stop the disposable verification cache"])
+        self.assertIn("'kernel-cache-hit' || 'kernel-bundle-state'",
+                      self.steps["Select verified DEBs and a public validation summary"])
+        self.assertNotIn("sudo rm", self.workflow)
+
+    def test_build_cache_flags_and_failure_propagation(self):
+        step = self.steps["Build and verify kernel DEBs in the normal package directory"]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        script = script.replace("${{ matrix.arch }}", "arm64")
+        for endpoint, upload in (("grpc://172.16.0.4:9092", "true"),
+                                 ("grpc://172.16.0.4:9092", "false"),
+                                 ("http://127.0.0.1:8080", "true")):
+            for exit_code in (0, 9):
+                with self.subTest(endpoint=endpoint, upload=upload, exit_code=exit_code):
+                    with tempfile.TemporaryDirectory() as temporary:
+                        root = Path(temporary)
+                        executable = root / "python3"
+                        executable.write_text(
+                            "#!" + sys.executable + "\n"
+                            "import json, os, sys\n"
+                            "from pathlib import Path\n"
+                            "Path(os.environ['CALLS']).write_text(json.dumps(sys.argv[1:]))\n"
+                            "sys.exit(int(os.environ['BUILD_EXIT']))\n")
+                        executable.chmod(0o755)
+                        calls = root / "calls.json"
+                        result = subprocess.run(
+                            ["bash", "-e", "-o", "pipefail", "-c", script],
+                            cwd=root, capture_output=True, text=True,
+                            env=dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                                     RUNNER_TEMP=temporary, KERNEL_REMOTE_CACHE=endpoint,
+                                     UPLOAD_KERNEL_CACHE=upload, CALLS=str(calls),
+                                     BUILD_EXIT=str(exit_code)))
+                        self.assertEqual(result.returncode, exit_code, result.stdout + result.stderr)
+                        argv = json.loads(calls.read_text())
+                        self.assertEqual(argv[argv.index("--remote-cache") + 1], endpoint)
+                        self.assertEqual("--upload-local-results" in argv, upload == "true")
+                        self.assertEqual(argv[argv.index("--architecture") + 1], "arm64")
 
 
 if __name__ == "__main__":
