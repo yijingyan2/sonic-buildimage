@@ -67,7 +67,7 @@ jobs:
           UPLOAD_CACHE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
         run: |
           printf '\nbuild --remote_upload_local_results=%s\n' \
-            "$UPLOAD_CACHE" >> .bazelrc
+            "$UPLOAD_CACHE" >> .bazelrc.user
 
       - name: Check native architecture and generated dependency state
         run: |
