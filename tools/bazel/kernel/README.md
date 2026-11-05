@@ -95,6 +95,14 @@ enables read-only reuse; `--upload-local-results` explicitly permits writes.
 launcher verifies the pinned native Bazel executable and requires the kernel
 action to use `linux-sandbox`; it does not start a worker container.
 
+The private consumer uses the shared
+[`debian_mirrors.cfg`](../debian_mirrors.cfg) download policy. Preparation copies
+the configuration into the consumer workspace, where its own `.bazelrc` enables
+it for dependency downloads. Package versions and checksum verification remain
+unchanged. The shared policy is a tracked handoff input: uncommitted changes
+are rejected, and committed changes invalidate reuse of previously verified
+kernel packages. The root workspace's `.bazelrc` is not inherited.
+
 Automatic Make preparation serializes concurrent requests and uses the existing
 `SONIC_BAZEL_CACHE_SOURCE` setting. The existing slave mount exposes this cache
 at `/bazel_cache`; the kernel uses its `kernel-linux-sandbox/repository_cache` and
