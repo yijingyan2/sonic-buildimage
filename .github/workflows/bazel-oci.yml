@@ -61,6 +61,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Configure remote cache uploads
+        if: matrix.architecture == 'amd64'
+        env:
+          UPLOAD_CACHE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        run: |
+          printf '\nbuild --remote_upload_local_results=%s\n' \
+            "$UPLOAD_CACHE" >> .bazelrc
+
       - name: Check native architecture and generated dependency state
         run: |
           test "$(uname -m)" = "${{ matrix.machine }}"
@@ -437,6 +445,7 @@ jobs:
         --distdir=/bazel_cache/distdir/rules_coreutils-1.0.1
         --distdir=/bazel_cache/distdir/rules_gzip-1.0.0
         --distdir=/bazel_cache/distdir/toolchain_utils-1.0.2
+        --remote_upload_local_results=${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
     defaults:
       run:
         shell: bash
