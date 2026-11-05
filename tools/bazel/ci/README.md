@@ -1,5 +1,110 @@
 # Shared Bazel CI helpers
 
+## Agent AppArmor profile selection
+
+The slave defaults to `SONIC_SLAVE_APPARMOR_PROFILE=unconfined`, preserving the
+existing native-Docker and privileged/DinD behavior for Make and Bazel builds.
+On an agent provisioned with the named `sonic-bazel-builder` profile, explicitly
+select it with `SONIC_CONFIG_USE_NATIVE_DOCKERD_FOR_BUILD=y` and
+`SONIC_SLAVE_APPARMOR_PROFILE=sonic-bazel-builder`. Pass these options consistently
+to configure and subsequent builds. This branch's VS CI and main official-build
+entrypoints explicitly set these options in their shared build options, so
+configure and subsequent builds select the same profile. Their agents must be
+provisioned with the profile before running these pipelines. Other pipeline
+entrypoints and the shared configuration default remain unchanged.
+
+The selector replaces only the AppArmor option in native-Docker mode; existing
+capabilities and seccomp settings are unchanged. Custom profile selection with
+privileged/DinD mode is rejected rather than ignored. An empty profile is also
+rejected. Docker rejects a missing named profile at container startup; there is
+no automatic fallback to `unconfined`.
+
+Native-Docker slaves start with soft and hard open-file limits of 1048576,
+matching `files/docker/docker` during image assembly. This lets the chroot Docker
+startup set its required limit without granting `CAP_SYS_RESOURCE`. The agent's
+`sysctl fs.nr_open` must be at least 1048576. Privileged/DinD slaves retain their
+existing 524288 limits. Recreate the slave container after changing these limits.
+
+The pipelines also set `SONIC_SLAVE_UNCONFINED_SYSTEM_PATHS=y`, which adds
+`--security-opt systempaths=unconfined`. Docker's default protected `/proc`
+submounts can prevent Bazel from mounting a new proc filesystem in its user/PID
+namespace even when namespace creation itself succeeds. This option removes
+Docker's masked and read-only system-path protections, including sensitive paths
+under `/proc` and `/sys`; the named AppArmor profile does not replace them.
+It is a security relaxation for approved build agents, not an isolation-equivalent
+replacement. The shared default is `n`; unrelated pipelines/builds keep their
+existing settings. Only `y` or `n` is accepted, and `y` requires native-Docker mode.
+No extra agent sysctl or daemon change is needed for this option.
+
+The named profile permits user namespaces using AppArmor's `default_allow` mode;
+it does not add restrictive filesystem confinement. Installing it alone does not
+change existing containers or the host-wide user-namespace restriction. First
+verify that the agent keeps `kernel.apparmor_restrict_unprivileged_userns=1` and
+has loaded the profile, then test inside the actual Trixie slave:
+
+```sh
+SONIC_RUN_CMDS='id; cat /proc/self/attr/current; unshare --user --map-current-user --mount --pid --fork true' \
+  make -f Makefile.work BLDENV=trixie \
+    SONIC_CONFIG_USE_NATIVE_DOCKERD_FOR_BUILD=y \
+    SONIC_SLAVE_APPARMOR_PROFILE=sonic-bazel-builder \
+    SONIC_SLAVE_UNCONFINED_SYSTEM_PATHS=y sonic-slave-run
+```
+
+The user must be non-root, its profile must name `sonic-bazel-builder`, and the
+namespace probe must succeed. Then validate an actual uncached Bazel kernel build
+with `linux-sandbox`. Normal Make builds remain supported, but named-profile use
+still depends on the provisioned agent and successful native-Docker validation.
+Also repeat the namespace probe with `--mount-proc` and execute Bazel's actual
+`linux-sandbox` helper. In the host's `docker inspect` output, `MaskedPaths` and
+`ReadonlyPaths` should be empty. A successful helper probe does not replace
+validation of the full kernel build.
+
+## Remote cache uploads
+
+The Bazel OCI workflow enables remote action-cache uploads for the AMD64 and
+ARM64 archive builds and the VS build only on pushes to `master`. Pull requests and manual runs remain
+read-only. The archive job overrides the default in its ignored `.bazelrc.user`,
+which the shared Bazel configuration imports without modifying tracked files;
+the VS job forwards the same policy through `BAZEL_CONTAINER_ARGS` to the Make
+builder and source validation commands.
+The agents and builder containers must be able to reach the remote cache, and
+the server must authorize writes. Enforce writer permissions on the server:
+the workflow flag is not an authorization boundary for pull-request code.
+Enabling uploads does not guarantee backfilling results already present in
+local caches.
+
+The fresh-checkout disk-cache verifier explicitly disables the remote cache,
+remote executor, and remote downloader for its isolated builds. This keeps remote
+hits from masking disk-cache misses and avoids enabling the remote downloader
+without the gRPC cache it requires. Normal workflow builds retain their configured
+remote services.
+
+If an isolated build fails, the verifier prints its retained Bazel build log
+and exit code to the CI console before raising the failure. The local
+`agent-cache/<phase>/build.log` remains available on the runner; raw logs are
+not added to public failure artifacts.
+
+## Debian download mirrors
+
+The root `.bazelrc` selects [`debian_mirrors.cfg`](../debian_mirrors.cfg) for
+Bazel-managed dependency downloads, including image packages and published
+toolchain inputs. The pinned upstream Debian snapshot `20260727T143429Z` maps
+to the SONiC mirror snapshot `20260727T000818Z`; security snapshot
+`20260726T121236Z` maps to `20260727T000824Z`. Original upstream URLs remain
+fallback candidates. Existing image-lock mirror URLs are normalized to HTTPS,
+and their security snapshot `20260726T000750Z` maps to `20260727T000824Z`.
+Other snapshot timestamps retain their upstream location.
+
+The policy changes download locations, not generated locks, package versions
+or checksum verification. When advancing snapshot inputs, verify the matching
+mirror content before updating the mappings. Commands that ignore rc files
+must pass `--downloader_config` explicitly. The policy does not rewrite
+`apt-get` or arbitrary `curl` commands, and does not provide connectivity to the
+private remote cache/downloader. The mirror may redirect HTTPS requests to
+HTTP, so HTTPS source URLs alone do not guarantee end-to-end TLS.
+
+## Shared helpers
+
 These helpers validate buildimage artifacts and preserve build evidence. The
 shared container runner discovers the selected owner's Bazel CI targets;
 package expectations remain in the owner declarations and tests.
