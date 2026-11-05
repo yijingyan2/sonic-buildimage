@@ -62,7 +62,6 @@ jobs:
           persist-credentials: false
 
       - name: Configure remote cache uploads
-        if: matrix.architecture == 'amd64'
         env:
           UPLOAD_CACHE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
         run: |

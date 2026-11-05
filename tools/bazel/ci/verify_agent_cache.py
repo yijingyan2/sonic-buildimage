@@ -95,7 +95,8 @@ def run_build(args, phase, checkout, cache, output_base):
                "--output_base=" + visible_output,
                "--output_user_root=" + visible_user,
                "build", *args.bazel_arg, *options,
-               "--remote_cache=", "--remote_executor=", "--lockfile_mode=update",
+               "--remote_cache=", "--remote_executor=", "--experimental_remote_downloader=",
+               "--lockfile_mode=update",
                "--execution_log_json_file=" + visible_evidence + "/execution.json",
                "--build_event_json_file=" + visible_evidence + "/events.jsonl", TARGET]
     if in_container:

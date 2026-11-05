@@ -1,14 +1,16 @@
 """Keep cache verification strict about disk hits and source invalidation."""
 
 import json
+from argparse import Namespace
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from tools.bazel.ci.verify_agent_cache import ACTIONS, action_evidence, archive_output, remove_temporary_work, verify
+from tools.bazel.ci.verify_agent_cache import ACTIONS, action_evidence, archive_output, remove_temporary_work, run_build, verify
 
 
 class CacheEvidenceTest(unittest.TestCase):
@@ -17,6 +19,28 @@ class CacheEvidenceTest(unittest.TestCase):
     def evidence(self, hit, runner, digest):
         return {"actions": {name: {"cache_hit": hit, "runner": runner} for name in ACTIONS},
                 "archive_sha256": digest}
+
+    def test_isolated_build_disables_remote_cache_executor_and_downloader(self):
+        for image in (None, "bazel-test-image"):
+            with self.subTest(image=image), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                args = Namespace(
+                    artifacts=root, docker_image=image, bazel="bazel",
+                    bazel_startup_arg=[], docker_arg=[], repository_cache=None,
+                    bazel_arg=["--remote_cache=grpc://cache:9092",
+                               "--experimental_remote_downloader=grpc://cache:9092"])
+                with mock.patch("tools.bazel.ci.verify_agent_cache.subprocess.run",
+                                return_value=mock.Mock(returncode=1)) as run:
+                    with self.assertRaisesRegex(RuntimeError, "cold build failed"):
+                        run_build(args, "cold", root, root / "cache", root / "output")
+                command = run.call_args.args[0]
+                for flag in ("--remote_cache=", "--remote_executor=",
+                             "--experimental_remote_downloader="):
+                    self.assertIn(flag, command)
+                    self.assertFalse(any(value.startswith(flag) and value != flag
+                                         for value in command[command.index(flag) + 1:]))
+                self.assertIn("--disk_cache=" + ("/bazel_cache" if image else str(root / "cache"))
+                              + "/disk_cache", command)
 
     def test_valid_disk_hits_and_source_invalidation(self):
         """Accept cold misses, unchanged disk hits and changed-source misses in receipts."""
