@@ -116,7 +116,13 @@ def run_build(args, phase, checkout, cache, output_base):
     with (evidence / "build.log").open("w") as log:
         result = subprocess.run(command, cwd=checkout, stdout=log, stderr=subprocess.STDOUT)
     if result.returncode:
-        raise RuntimeError(f"{phase} build failed; see {evidence / 'build.log'}")
+        print(f"{phase} build failed with exit code {result.returncode}; Bazel output:",
+              file=sys.stderr, flush=True)
+        with (evidence / "build.log").open() as log:
+            shutil.copyfileobj(log, sys.stderr)
+        sys.stderr.flush()
+        raise RuntimeError(
+            f"{phase} build failed with exit code {result.returncode}; see {evidence / 'build.log'}")
     actions = action_evidence(evidence / "execution.json")
     output = archive_output(evidence / "events.jsonl")
     if in_container:

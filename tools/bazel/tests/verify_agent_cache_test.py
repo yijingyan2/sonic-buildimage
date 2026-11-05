@@ -2,6 +2,8 @@
 
 import json
 from argparse import Namespace
+from contextlib import redirect_stderr
+import io
 from pathlib import Path
 import sys
 import tempfile
@@ -31,7 +33,7 @@ class CacheEvidenceTest(unittest.TestCase):
                                "--experimental_remote_downloader=grpc://cache:9092"])
                 with mock.patch("tools.bazel.ci.verify_agent_cache.subprocess.run",
                                 return_value=mock.Mock(returncode=1)) as run:
-                    with self.assertRaisesRegex(RuntimeError, "cold build failed"):
+                    with redirect_stderr(io.StringIO()), self.assertRaisesRegex(RuntimeError, "cold build failed"):
                         run_build(args, "cold", root, root / "cache", root / "output")
                 command = run.call_args.args[0]
                 for flag in ("--remote_cache=", "--remote_executor=",
@@ -41,6 +43,29 @@ class CacheEvidenceTest(unittest.TestCase):
                                          for value in command[command.index(flag) + 1:]))
                 self.assertIn("--disk_cache=" + ("/bazel_cache" if image else str(root / "cache"))
                               + "/disk_cache", command)
+
+    def test_build_failure_prints_retained_bazel_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bazel = root / "bazel"
+            bazel.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' 'fixture build stdout'\n"
+                "printf '%s\\n' 'fixture build stderr' >&2\n"
+                "exit 37\n")
+            bazel.chmod(0o755)
+            args = Namespace(
+                artifacts=root, docker_image=None, bazel=str(bazel),
+                bazel_startup_arg=[], bazel_arg=[], repository_cache=None)
+            diagnostics = io.StringIO()
+            with redirect_stderr(diagnostics):
+                with self.assertRaisesRegex(RuntimeError, "cold build failed with exit code 37"):
+                    run_build(args, "cold", root, root / "cache", root / "output")
+            retained = (root / "cold/build.log").read_text()
+            self.assertEqual(retained, "fixture build stdout\nfixture build stderr\n")
+            self.assertIn(retained, diagnostics.getvalue())
+            self.assertIn("cold build failed with exit code 37", diagnostics.getvalue())
+            self.assertTrue((root / "cold/command.json").is_file())
 
     def test_valid_disk_hits_and_source_invalidation(self):
         """Accept cold misses, unchanged disk hits and changed-source misses in receipts."""
