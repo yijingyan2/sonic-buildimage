@@ -38,7 +38,7 @@ jobs:
           - name: AMD64
             architecture: amd64
             machine: x86_64
-            runner: ubuntu-24.04
+            runner: [self-hosted, linux, x64, bazel-vmss]
             platform: x86_64_trixie
           - name: ARM64
             architecture: arm64
@@ -415,19 +415,15 @@ jobs:
     name: Make VS with Bazel SWSS (AMD64)
     needs: [checks]
     # Build full VS images for master pushes and same-repository pull requests
-    # after hosted regression and dependency-resolution checks.
-    # Manual runs retain their skip option; external-fork PRs use hosted checks.
+    # after regression and dependency-resolution checks.
+    # Manual runs retain their skip option; external-fork PRs use checks only.
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'workflow_dispatch' && !inputs.skip_vs)
-    # Share the existing P330 pool; checkout still uses this event's ref and SHA.
-    runs-on:
-      - self-hosted
-      - linux
-      - x64
-      - sonic-vs-source-master
+    # Use the Bazel VMSS pool; checkout still uses this event's ref and SHA.
+    runs-on: [self-hosted, linux, x64, bazel-vmss]
     timeout-minutes: 720
     env:
       SONIC_CI_CONTAINER_LABEL: io.sonic-buildimage.ci-job=${{ github.repository }}:${{ github.run_id }}:${{ github.run_attempt }}:vs
@@ -499,7 +495,7 @@ jobs:
           printf 'Bazel cache: %s\nMake package cache: %s (%s)\n' \
             "$SONIC_BAZEL_CACHE_SOURCE" "$SONIC_DPKG_CACHE_SOURCE" "$SONIC_DPKG_CACHE_METHOD"
 
-      - name: Download verified sources from the hosted checks
+      - name: Download verified sources from the regression checks
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: bazel-repository-inputs
